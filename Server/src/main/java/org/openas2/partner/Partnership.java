@@ -73,6 +73,11 @@ public class Partnership implements Serializable {
     // A hopefully temporary key to maintain backwards compatibility
     public static final String USE_NEW_CERTIFICATE_LOOKUP_MODE = "use_new_certificate_lookup_mode";
 
+    /* NAESB 4.0 PGP payload encryption attributes */
+    public static final String PA_PGP_ENCRYPT = "pgp_encrypt";                         // "true" to PGP-encrypt outbound payload
+    public static final String PID_PGP_RECEIVER_KEY_ALIAS = "pgp_receiver_key_alias";  // alias (filename) of partner's public PGP key for encrypting outbound
+    public static final String PID_PGP_SENDER_KEY_ALIAS = "pgp_sender_key_alias";      // alias of our key (reserved for future PGP signing support)
+
     /*
      * If set and an error occurs while processing a document, an error MDN will not be sent. This
      * flag was made because some AS2 products don't provide email or some other external notification

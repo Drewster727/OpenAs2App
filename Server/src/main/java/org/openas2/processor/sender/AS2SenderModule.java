@@ -21,6 +21,8 @@ import org.openas2.params.InvalidParameterException;
 import org.openas2.params.MessageParameters;
 import org.openas2.params.ParameterParser;
 import org.openas2.partner.Partnership;
+import org.openas2.pgp.PGPKeyFactory;
+import org.openas2.pgp.PGPUtils;
 import org.openas2.processor.Processor;
 import org.openas2.processor.msgtracking.BaseMsgTrackingModule.FIELDS;
 import org.openas2.processor.resender.ResenderModule;
@@ -275,6 +277,31 @@ public class AS2SenderModule extends HttpSenderModule implements HasSchedule {
     public MimeBodyPart secure(Message msg) throws Exception {
         // Set up encrypt/sign variables
         MimeBodyPart dataBP = msg.getData();
+
+        // PGP payload encryption (NAESB 4.0)
+        // Applied before S/MIME operations so the encrypted payload is what gets wrapped in the AS2 envelope.
+        Partnership partnership0 = msg.getPartnership();
+        if ("true".equalsIgnoreCase(partnership0.getAttribute(Partnership.PA_PGP_ENCRYPT))) {
+            Object pgpComp = getSession().getComponents().get(PGPKeyFactory.COMPID);
+            if (!(pgpComp instanceof PGPKeyFactory)) {
+                throw new OpenAS2Exception("pgp_encrypt is configured for partnership '" + partnership0.getName() + "' but no PGPKeyFactory (pgpkeys) component is registered in config.xml");
+            }
+            PGPKeyFactory pgpKeys = (PGPKeyFactory) pgpComp;
+            String alias = partnership0.getAttribute(Partnership.PID_PGP_RECEIVER_KEY_ALIAS);
+            if (alias == null || alias.isEmpty()) {
+                throw new OpenAS2Exception("pgp_encrypt requires pgp_receiver_key_alias to be set in partnership '" + partnership0.getName() + "'");
+            }
+            if (logger.isDebugEnabled()) {
+                logger.debug("PGP-encrypting outbound payload with key alias '" + alias + "'" + msg.getLogMsgID());
+            }
+            String savedContentType = dataBP.getContentType();
+            byte[] encrypted = PGPUtils.encrypt(PGPUtils.extractBytes(dataBP), pgpKeys.getPublicKey(alias));
+            dataBP = PGPUtils.wrapBytes(encrypted, savedContentType);
+            if (logger.isDebugEnabled()) {
+                logger.debug("PGP payload encryption successful" + msg.getLogMsgID());
+            }
+        }
+
         /*
          * Based on RFC4130, RFC6362 and RFC5042, the MIC is calculated as follows:
          * Signed message - MIME header fields and content that is to be signed which

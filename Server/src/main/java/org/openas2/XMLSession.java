@@ -12,6 +12,7 @@ import org.openas2.params.ParameterParser;
 import org.openas2.message.MessageFactory;
 import org.openas2.partner.Partnership;
 import org.openas2.partner.PartnershipFactory;
+import org.openas2.pgp.PGPKeyFactory;
 import org.openas2.processor.Processor;
 import org.openas2.processor.ProcessorModule;
 import org.openas2.processor.receiver.PollingModule;
@@ -51,6 +52,7 @@ public class XMLSession extends BaseSession {
     public static final String EL_MESSAGES = "messages";
     public static final String EL_COMMANDS = "commands";
     public static final String EL_POLLER_CONFIG = "pollerConfigBase";
+    public static final String EL_PGP_KEYS = "pgpkeys";
     // private static final String PARAM_BASE_DIRECTORY = "basedir";
 
     private CommandRegistry commandRegistry;
@@ -118,6 +120,8 @@ public class XMLSession extends BaseSession {
                 loadBasePartnershipPollerConfig(rootNode);
             } else if (nodeName.equals(EL_MESSAGES)) {
                 loadMessages(rootNode);
+            } else if (nodeName.equals(EL_PGP_KEYS)) {
+                loadPGPKeys(rootNode);
             } else if (nodeName.equals("#text")) {
                 // do nothing
             } else if (nodeName.equals("#comment")) {
@@ -227,6 +231,16 @@ public class XMLSession extends BaseSession {
         }
         String identifier = certFx.getIdentifier();
         setComponent(identifier, certFx);
+    }
+
+    private void loadPGPKeys(Node rootNode) throws OpenAS2Exception {
+        Component comp = XMLUtil.getComponent(rootNode, this);
+        if (comp == null) {
+            // Disabled, do nothing
+            return;
+        }
+        setComponent(PGPKeyFactory.COMPID, comp);
+        LOGGER.info("PGP key factory loaded.");
     }
 
     private void loadBasePartnershipPollerConfig(Node node) throws OpenAS2Exception {

@@ -27,6 +27,8 @@ import org.openas2.processor.msgtracking.BaseMsgTrackingModule.FIELDS;
 import org.openas2.processor.resender.ResenderModule;
 import org.openas2.processor.sender.SenderModule;
 import org.openas2.processor.storage.StorageModule;
+import org.openas2.pgp.PGPKeyFactory;
+import org.openas2.pgp.PGPUtils;
 import org.openas2.util.AS2Util;
 import org.openas2.util.ByteArrayDataSource;
 import org.openas2.util.DateUtil;
@@ -479,6 +481,35 @@ public class AS2ReceiverHandler implements NetModuleHandler {
             LOG.error(msg.getLogMsg(), e);
             throw new DispositionException(new DispositionType("automatic-action", "MDN-sent-automatically", "processed", "Error", "decompression-failed"), AS2ReceiverModule.DISP_DECOMPRESSION_ERROR, new Exception("Unexpected error occurred checking for compressed message: " + e.getMessage()));
         }
+
+        // PGP payload decryption (NAESB 4.0)
+        // Auto-detects PGP-encrypted payload. Skipped silently if PGPKeyFactory is not registered in config.
+        try {
+            Object pgpComp = getModule().getSession().getComponents().get(PGPKeyFactory.COMPID);
+            if (pgpComp instanceof PGPKeyFactory) {
+                PGPKeyFactory pgpKeys = (PGPKeyFactory) pgpComp;
+                if (PGPUtils.isPGPEncrypted(msg.getData())) {
+                    if (LOG.isDebugEnabled()) {
+                        LOG.debug("PGP-encrypted payload detected, decrypting" + msg.getLogMsgID());
+                    }
+                    String savedContentType = msg.getData().getContentType();
+                    byte[] decrypted = PGPUtils.decrypt(
+                            PGPUtils.extractBytes(msg.getData()),
+                            pgpKeys.getSecretKeyRingCollection(),
+                            pgpKeys.getPrivateKeyPassphrase());
+                    msg.setData(PGPUtils.wrapBytes(decrypted, savedContentType));
+                    if (LOG.isDebugEnabled()) {
+                        LOG.debug("PGP payload decryption successful" + msg.getLogMsgID());
+                    }
+                }
+            }
+        } catch (Exception e) {
+            msg.setLogMsg("Error decrypting PGP payload: " + org.openas2.util.Logging.getExceptionMsg(e));
+            LOG.error(msg.getLogMsg(), e);
+            throw new DispositionException(new DispositionType("automatic-action", "MDN-sent-automatically",
+                    "processed", "Error", "decryption-failed"), AS2ReceiverModule.DISP_DECRYPTION_ERROR, e);
+        }
+
         return mic;
     }
 
