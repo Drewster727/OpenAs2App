@@ -29,8 +29,8 @@ services:
     tty: true
     stdin_open: true
     volumes:
-      - ./config-partner:/opt/openas2/config:rw
-      - ./data-partner:/opt/openas2/data:rw
+      - ./validation/config-partner:/opt/openas2/config:rw
+      - ./validation/data-partner:/opt/openas2/data:rw
 
   openas2_webui:
     build:
