@@ -20,8 +20,10 @@ import org.bouncycastle.openpgp.operator.bc.BcPublicKeyKeyEncryptionMethodGenera
 import org.bouncycastle.openpgp.operator.jcajce.JcePBESecretKeyDecryptorBuilder;
 import org.bouncycastle.openpgp.operator.jcajce.JcePublicKeyDataDecryptorFactoryBuilder;
 
+import jakarta.activation.DataHandler;
 import jakarta.mail.MessagingException;
 import jakarta.mail.internet.MimeBodyPart;
+import org.openas2.util.ByteArrayDataSource;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -179,35 +181,46 @@ public class PGPUtils {
 
     /**
      * Extract the raw byte content from a MimeBodyPart.
+     * Uses the DataHandler's DataSource directly when available (bypasses DCH lookup),
+     * then falls back to getInputStream() for S/MIME-parsed parts.
      */
     public static byte[] extractBytes(MimeBodyPart part) throws MessagingException, IOException {
-        Object content = part.getContent();
-        if (content instanceof byte[]) {
-            return (byte[]) content;
-        }
-        if (content instanceof InputStream) {
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            byte[] buffer = new byte[4096];
-            int bytesRead;
-            try (InputStream is = (InputStream) content) {
-                while ((bytesRead = is.read(buffer)) != -1) {
-                    baos.write(buffer, 0, bytesRead);
-                }
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        byte[] buffer = new byte[4096];
+        int bytesRead;
+        // Prefer DataSource.getInputStream() — works for ByteArrayDataSource-backed parts
+        // without requiring a DataContentHandler for the MIME type.
+        InputStream is;
+        jakarta.activation.DataSource ds = part.getDataHandler().getDataSource();
+        if (ds != null) {
+            is = ds.getInputStream();
+        } else {
+            // S/MIME-parsed parts or legacy setContent() parts — getContent() returns
+            // the object directly; cast or convert to bytes.
+            Object content = part.getContent();
+            if (content instanceof byte[]) {
+                return (byte[]) content;
             }
-            return baos.toByteArray();
+            is = part.getInputStream();
         }
-        // Fallback: treat as string content
-        return content.toString().getBytes();
+        try (InputStream stream = is) {
+            while ((bytesRead = stream.read(buffer)) != -1) {
+                baos.write(buffer, 0, bytesRead);
+            }
+        }
+        return baos.toByteArray();
     }
 
     /**
      * Wrap raw bytes into a MimeBodyPart with the given content-type.
-     * Used to re-wrap decrypted or encrypted payload back into a MIME structure.
+     * Uses DataHandler(ByteArrayDataSource) so that getInputStream() works
+     * for any MIME type without requiring a DataContentHandler registration.
      */
     public static MimeBodyPart wrapBytes(byte[] data, String contentType) throws MessagingException {
+        String ct = contentType != null ? contentType : "application/octet-stream";
         MimeBodyPart part = new MimeBodyPart();
-        part.setContent(data, contentType != null ? contentType : "application/octet-stream");
-        part.setHeader("Content-Type", contentType != null ? contentType : "application/octet-stream");
+        part.setDataHandler(new DataHandler(new ByteArrayDataSource(data, ct, null)));
+        part.setHeader("Content-Type", ct);
         return part;
     }
 }
