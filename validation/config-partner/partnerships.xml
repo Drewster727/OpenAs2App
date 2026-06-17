@@ -1,0 +1,40 @@
+<partnerships>
+    <partner name="MyCompany"
+             as2_id="MyCompany_OID"
+             x509_alias="mycompany"
+             email="as2msgs@openas2.com"/>
+
+    <partner name="PartnerA"
+             as2_id="PartnerA_OID"
+             x509_alias="partnera"
+             email="as2msgs@partnera.com"/>
+
+    <!-- PartnerA sends to MyCompany on the main openas2 container (internal Docker network) -->
+    <partnership name="PartnerA-to-MyCompany">
+        <sender name="PartnerA"/>
+        <receiver name="MyCompany"/>
+        <pollerConfig enabled="true"/>
+        <attribute name="protocol" value="as2"/>
+        <attribute name="content_transfer_encoding" value="binary"/>
+        <attribute name="subject" value="File $attributes.filename$ sent from $sender.name$ to $receiver.name$"/>
+        <attribute name="as2_url" value="http://openas2:10080"/>
+        <attribute name="as2_mdn_to" value="edi@partnera.com"/>
+        <attribute name="as2_mdn_options" value="signed-receipt-protocol=optional, pkcs7-signature; signed-receipt-micalg=optional, SHA-256"/>
+        <attribute name="pgp_encrypt" value="true"/>
+        <attribute name="pgp_receiver_key_alias" value="mycompany"/>
+        <attribute name="encrypt" value="3DES"/>
+        <attribute name="sign" value="SHA-256"/>
+        <attribute name="resend_max_retries" value="3"/>
+        <attribute name="prevent_canonicalization_for_mic" value="false"/>
+        <attribute name="rename_digest_to_old_name" value="false"/>
+        <attribute name="remove_cms_algorithm_protection_attrib" value="false"/>
+    </partnership>
+
+    <!-- MyCompany messages received by PartnerA -->
+    <partnership name="MyCompany-to-PartnerA">
+        <sender name="MyCompany"/>
+        <receiver name="PartnerA"/>
+        <attribute name="store_received_file_to" value="$properties.storageBaseDir$/inbox/$msg.receiver.as2_id$/inbox/$msg.sender.as2_id$-$rand.12345$-$msg.content-disposition.filename$"/>
+    </partnership>
+
+</partnerships>
