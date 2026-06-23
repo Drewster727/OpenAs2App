@@ -250,13 +250,7 @@ cat validation/data-partner/inbox/PartnerA_OID/inbox/*
 
 ## 8. Test B — encrypted but unsigned message (must be rejected)
 
-Flip `pgp_sign` to `false` on the sending side only, to simulate a partner that hasn't enabled PGP signing, and confirm the receiver (which still requires it) rejects the message rather than silently accepting it:
-
-```bash
-sed -i '' 's#<attribute name="pgp_sign" value="true"/>\n        <attribute name="pgp_sender_key_alias" value="mycompany"/>#&#' validation/config/partnerships.xml  # no-op placeholder; edit MyCompany-to-PartnerA's pgp_sign to "false" manually instead
-```
-
-(Simplest is to just open `validation/config/partnerships.xml` and change the `pgp_sign` value to `false` on the `MyCompany-to-PartnerA` partnership, leaving PartnerA's config untouched.)
+Flip `pgp_sign` to `false` on the sending side only, to simulate a partner that hasn't enabled PGP signing, and confirm the receiver (which still requires it) rejects the message rather than silently accepting it. Open `validation/config/partnerships.xml` and change `pgp_sign` to `false` on the `MyCompany-to-PartnerA` partnership only — leave PartnerA's config untouched, since it's the one that needs to keep *requiring* a signature for this test to mean anything.
 
 ```bash
 docker compose -f validation/docker-compose.yml -p as2pgpval restart openas2
