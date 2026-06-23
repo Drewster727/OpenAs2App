@@ -68,35 +68,37 @@ Set these as flat `<attribute>` elements inside a `<partnership>` block in `part
 
 ### Example: Acme → Beta (sign + encrypt)
 
-On **Acme**'s station, the outbound partnership:
+AS2 partnership matching is per-direction and per-station: each station that touches a given direction of traffic needs its **own local copy** of that direction's `<partnership>` entry in its own `partnerships.xml` — Acme's copy is matched when Acme *sends*, Beta's copy is matched when Beta *receives* the same traffic. So the block below is deliberately identical in both files; it's one logical entry duplicated across two configs, not two different configs that happen to match. What differs is which code path reads it.
+
+On **Acme**'s station — `Acme-to-Beta` is matched here because Acme is *sending*, so `AS2SenderModule` runs:
 
 ```xml
 <partnership name="Acme-to-Beta">
     <sender name="Acme"/>
     <receiver name="Beta"/>
     <attribute name="pgp_encrypt" value="true"/>
-    <attribute name="pgp_receiver_key_alias" value="beta"/>
+    <attribute name="pgp_receiver_key_alias" value="beta"/>   <!-- Beta's public key, public_keys_dir/beta.asc -->
     <attribute name="pgp_sign" value="true"/>
-    <attribute name="pgp_sender_key_alias" value="acme"/>
+    <attribute name="pgp_sender_key_alias" value="acme"/>     <!-- Acme's OWN signing key, in Acme's private_keyring -->
 </partnership>
 ```
 
-Here `pgp_sender_key_alias="acme"` resolves against Acme's own private keyring (signing key).
-
-On **Beta**'s station, the mirrored entry used to match and process this inbound traffic:
+On **Beta**'s station — the *same* `Acme-to-Beta` entry, byte-for-byte, but matched here because Beta is *receiving*, so `AS2ReceiverHandler` runs instead:
 
 ```xml
 <partnership name="Acme-to-Beta">
     <sender name="Acme"/>
     <receiver name="Beta"/>
     <attribute name="pgp_encrypt" value="true"/>
-    <attribute name="pgp_receiver_key_alias" value="beta"/>
+    <attribute name="pgp_receiver_key_alias" value="beta"/>   <!-- unused on receive; only read by AS2SenderModule -->
     <attribute name="pgp_sign" value="true"/>
-    <attribute name="pgp_sender_key_alias" value="acme"/>
+    <attribute name="pgp_sender_key_alias" value="acme"/>     <!-- Acme's PUBLIC key, in Beta's public_keys_dir/acme.asc -->
 </partnership>
 ```
 
-Same attribute values — but here `pgp_sender_key_alias="acme"` resolves against Beta's `public_keys_dir/acme.asc` (Acme's public key, used to verify the signature). Which key store gets used depends only on which code path runs (sending vs. receiving), not on any extra config.
+Same `pgp_sender_key_alias="acme"` value, different key store: `AS2SenderModule` resolves it against the local private keyring (because there, "we" are Acme), `AS2ReceiverHandler` resolves it against `public_keys_dir` (because there, Acme is the remote partner). Which store gets used depends only on which code path runs, not on any extra config.
+
+If Beta also sends traffic back to Acme, that's a separate direction and needs its own mirrored `Beta-to-Acme` entry (with `pgp_sender_key_alias="beta"`, `pgp_receiver_key_alias="acme"`) duplicated on both stations the same way.
 
 ## 5. Behavior and failure handling
 
