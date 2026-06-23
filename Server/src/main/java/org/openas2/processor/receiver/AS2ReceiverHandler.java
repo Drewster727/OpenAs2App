@@ -29,6 +29,7 @@ import org.openas2.processor.sender.SenderModule;
 import org.openas2.processor.storage.StorageModule;
 import org.openas2.pgp.PGPKeyFactory;
 import org.openas2.pgp.PGPUtils;
+import org.bouncycastle.openpgp.PGPException;
 import org.openas2.util.AS2Util;
 import org.openas2.util.ByteArrayDataSource;
 import org.openas2.util.DateUtil;
@@ -493,16 +494,46 @@ public class AS2ReceiverHandler implements NetModuleHandler {
                         LOG.debug("PGP-encrypted payload detected, decrypting" + msg.getLogMsgID());
                     }
                     String savedContentType = msg.getData().getContentType();
-                    byte[] decrypted = PGPUtils.decrypt(
-                            PGPUtils.extractBytes(msg.getData()),
-                            pgpKeys.getSecretKeyRingCollection(),
-                            pgpKeys.getPrivateKeyPassphrase());
+                    boolean pgpSignRequired = "true".equalsIgnoreCase(msg.getPartnership().getAttribute(Partnership.PA_PGP_SIGN));
+                    byte[] decrypted;
+                    if (pgpSignRequired) {
+                        String senderAlias = msg.getPartnership().getAttribute(Partnership.PID_PGP_SENDER_KEY_ALIAS);
+                        if (senderAlias == null || senderAlias.isEmpty()) {
+                            throw new OpenAS2Exception("pgp_sign requires pgp_sender_key_alias to be set in partnership '" + msg.getPartnership().getName() + "'");
+                        }
+                        if (LOG.isDebugEnabled()) {
+                            LOG.debug("Verifying PGP signature with key alias '" + senderAlias + "'" + msg.getLogMsgID());
+                        }
+                        try {
+                            decrypted = PGPUtils.decryptAndVerify(
+                                    PGPUtils.extractBytes(msg.getData()),
+                                    pgpKeys.getSecretKeyRingCollection(),
+                                    pgpKeys.getPrivateKeyPassphrase(),
+                                    pgpKeys.getPublicKey(senderAlias),
+                                    true);
+                        } catch (PGPException e) {
+                            msg.setLogMsg("Error verifying PGP signature: " + org.openas2.util.Logging.getExceptionMsg(e));
+                            LOG.error(msg.getLogMsg(), e);
+                            throw new DispositionException(new DispositionType("automatic-action", "MDN-sent-automatically",
+                                    "processed", "Error", "integrity-check-failed"), AS2ReceiverModule.DISP_VERIFY_SIGNATURE_FAILED, e);
+                        }
+                        if (LOG.isDebugEnabled()) {
+                            LOG.debug("PGP signature verification successful" + msg.getLogMsgID());
+                        }
+                    } else {
+                        decrypted = PGPUtils.decrypt(
+                                PGPUtils.extractBytes(msg.getData()),
+                                pgpKeys.getSecretKeyRingCollection(),
+                                pgpKeys.getPrivateKeyPassphrase());
+                    }
                     msg.setData(PGPUtils.wrapBytes(decrypted, savedContentType));
                     if (LOG.isDebugEnabled()) {
                         LOG.debug("PGP payload decryption successful" + msg.getLogMsgID());
                     }
                 }
             }
+        } catch (DispositionException e) {
+            throw e;
         } catch (Exception e) {
             msg.setLogMsg("Error decrypting PGP payload: " + org.openas2.util.Logging.getExceptionMsg(e));
             LOG.error(msg.getLogMsg(), e);

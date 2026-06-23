@@ -23,6 +23,7 @@ import org.openas2.params.ParameterParser;
 import org.openas2.partner.Partnership;
 import org.openas2.pgp.PGPKeyFactory;
 import org.openas2.pgp.PGPUtils;
+import org.bouncycastle.openpgp.PGPPrivateKey;
 import org.openas2.processor.Processor;
 import org.openas2.processor.msgtracking.BaseMsgTrackingModule.FIELDS;
 import org.openas2.processor.resender.ResenderModule;
@@ -295,7 +296,20 @@ public class AS2SenderModule extends HttpSenderModule implements HasSchedule {
                 logger.debug("PGP-encrypting outbound payload with key alias '" + alias + "'" + msg.getLogMsgID());
             }
             String savedContentType = dataBP.getContentType();
-            byte[] encrypted = PGPUtils.encrypt(PGPUtils.extractBytes(dataBP), pgpKeys.getPublicKey(alias));
+            byte[] encrypted;
+            if ("true".equalsIgnoreCase(partnership0.getAttribute(Partnership.PA_PGP_SIGN))) {
+                String senderAlias = partnership0.getAttribute(Partnership.PID_PGP_SENDER_KEY_ALIAS);
+                if (senderAlias == null || senderAlias.isEmpty()) {
+                    throw new OpenAS2Exception("pgp_sign requires pgp_sender_key_alias to be set in partnership '" + partnership0.getName() + "'");
+                }
+                if (logger.isDebugEnabled()) {
+                    logger.debug("PGP-signing outbound payload with key alias '" + senderAlias + "'" + msg.getLogMsgID());
+                }
+                PGPPrivateKey signingKey = pgpKeys.getSigningKey(senderAlias);
+                encrypted = PGPUtils.signAndEncrypt(PGPUtils.extractBytes(dataBP), pgpKeys.getPublicKey(alias), signingKey);
+            } else {
+                encrypted = PGPUtils.encrypt(PGPUtils.extractBytes(dataBP), pgpKeys.getPublicKey(alias));
+            }
             dataBP = PGPUtils.wrapBytes(encrypted, savedContentType);
             if (logger.isDebugEnabled()) {
                 logger.debug("PGP payload encryption successful" + msg.getLogMsgID());

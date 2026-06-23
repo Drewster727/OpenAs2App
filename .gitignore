@@ -13,6 +13,7 @@ pom.xml.versionsBackup
 /lib/
 /Server/src/logs/
 /Server/src/test/resources/config/
+/Server/src/config/as2_certs.p12
 **/.DS_Store
 **/.settings
 **/*.class

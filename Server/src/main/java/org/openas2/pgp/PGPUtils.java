@@ -1,5 +1,6 @@
 package org.openas2.pgp;
 
+import org.bouncycastle.bcpg.HashAlgorithmTags;
 import org.bouncycastle.openpgp.PGPCompressedData;
 import org.bouncycastle.openpgp.PGPCompressedDataGenerator;
 import org.bouncycastle.openpgp.PGPEncryptedData;
@@ -8,13 +9,20 @@ import org.bouncycastle.openpgp.PGPEncryptedDataList;
 import org.bouncycastle.openpgp.PGPException;
 import org.bouncycastle.openpgp.PGPLiteralData;
 import org.bouncycastle.openpgp.PGPLiteralDataGenerator;
+import org.bouncycastle.openpgp.PGPOnePassSignature;
+import org.bouncycastle.openpgp.PGPOnePassSignatureList;
 import org.bouncycastle.openpgp.PGPPrivateKey;
 import org.bouncycastle.openpgp.PGPPublicKey;
 import org.bouncycastle.openpgp.PGPPublicKeyEncryptedData;
 import org.bouncycastle.openpgp.PGPSecretKey;
 import org.bouncycastle.openpgp.PGPSecretKeyRingCollection;
+import org.bouncycastle.openpgp.PGPSignature;
+import org.bouncycastle.openpgp.PGPSignatureGenerator;
+import org.bouncycastle.openpgp.PGPSignatureList;
 import org.bouncycastle.openpgp.PGPUtil;
 import org.bouncycastle.openpgp.jcajce.JcaPGPObjectFactory;
+import org.bouncycastle.openpgp.operator.bc.BcPGPContentSignerBuilder;
+import org.bouncycastle.openpgp.operator.bc.BcPGPContentVerifierBuilderProvider;
 import org.bouncycastle.openpgp.operator.bc.BcPGPDataEncryptorBuilder;
 import org.bouncycastle.openpgp.operator.bc.BcPublicKeyKeyEncryptionMethodGenerator;
 import org.bouncycastle.openpgp.operator.jcajce.JcePBESecretKeyDecryptorBuilder;
@@ -74,11 +82,70 @@ public class PGPUtils {
     }
 
     /**
+     * PGP-sign then encrypt plaintext bytes: the literal data is wrapped in an inline
+     * one-pass-signature (signed with {@code signingKey}), compressed, then encrypted for
+     * {@code recipientKey} — standard OpenPGP sign-then-encrypt. The signature can be checked
+     * on decrypt via {@link #decryptAndVerify}.
+     */
+    public static byte[] signAndEncrypt(byte[] plaintext, PGPPublicKey recipientKey, PGPPrivateKey signingKey)
+            throws IOException, PGPException {
+        int keyAlgorithm = signingKey.getPublicKeyPacket().getAlgorithm();
+        PGPSignatureGenerator sigGen = new PGPSignatureGenerator(
+                new BcPGPContentSignerBuilder(keyAlgorithm, HashAlgorithmTags.SHA256));
+        sigGen.init(PGPSignature.BINARY_DOCUMENT, signingKey);
+
+        BcPGPDataEncryptorBuilder encryptorBuilder = new BcPGPDataEncryptorBuilder(PGPEncryptedData.AES_256);
+        encryptorBuilder.setWithIntegrityPacket(true);
+        encryptorBuilder.setSecureRandom(new SecureRandom());
+
+        PGPEncryptedDataGenerator encGen = new PGPEncryptedDataGenerator(encryptorBuilder);
+        encGen.addMethod(new BcPublicKeyKeyEncryptionMethodGenerator(recipientKey));
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        try (ByteArrayOutputStream compressedOut = new ByteArrayOutputStream()) {
+            PGPCompressedDataGenerator compressor = new PGPCompressedDataGenerator(PGPCompressedData.ZIP);
+            try (var compStream = compressor.open(compressedOut)) {
+                sigGen.generateOnePassVersion(false).encode(compStream);
+
+                PGPLiteralDataGenerator literalGen = new PGPLiteralDataGenerator();
+                try (var literalStream = literalGen.open(compStream, PGPLiteralData.BINARY, "", plaintext.length, new Date())) {
+                    literalStream.write(plaintext);
+                    sigGen.update(plaintext);
+                }
+
+                sigGen.generate().encode(compStream);
+            }
+            byte[] compressedBytes = compressedOut.toByteArray();
+
+            try (var encStream = encGen.open(out, compressedBytes.length)) {
+                encStream.write(compressedBytes);
+            }
+        }
+        return out.toByteArray();
+    }
+
+    /**
      * Decrypt PGP-encrypted bytes using our secret keyring.
      * BouncyCastle automatically matches the correct secret key via the key ID embedded in the message.
      */
     public static byte[] decrypt(byte[] ciphertext, PGPSecretKeyRingCollection secretKeyRings, char[] passphrase)
             throws IOException, PGPException {
+        return decryptAndVerify(ciphertext, secretKeyRings, passphrase, null, false);
+    }
+
+    /**
+     * Decrypt PGP-encrypted bytes using our secret keyring, optionally verifying an inline
+     * OpenPGP signature against {@code verificationKey} (as produced by {@link #signAndEncrypt}).
+     *
+     * <p>If the decrypted payload carries a one-pass-signature wrapping the literal data and
+     * {@code verificationKey} is non-null, the signature is verified and a {@link PGPException}
+     * is thrown on failure. If {@code requireSignature} is true and no signature is present
+     * (or no verification key was supplied to check it), a {@link PGPException} is thrown.
+     * When {@code verificationKey} is null and {@code requireSignature} is false, any embedded
+     * signature is parsed past but not checked, matching the legacy {@link #decrypt} behavior.
+     */
+    public static byte[] decryptAndVerify(byte[] ciphertext, PGPSecretKeyRingCollection secretKeyRings, char[] passphrase,
+            PGPPublicKey verificationKey, boolean requireSignature) throws IOException, PGPException {
         InputStream in = PGPUtil.getDecoderStream(new ByteArrayInputStream(ciphertext));
         JcaPGPObjectFactory pgpFactory = new JcaPGPObjectFactory(in);
 
@@ -123,6 +190,18 @@ public class PGPUtils {
             message = plainFactory.nextObject();
         }
 
+        // Unwrap an inline one-pass-signature wrapping the literal data, if present
+        PGPOnePassSignature onePassSig = null;
+        if (message instanceof PGPOnePassSignatureList) {
+            onePassSig = ((PGPOnePassSignatureList) message).get(0);
+            if (verificationKey != null) {
+                onePassSig.init(new BcPGPContentVerifierBuilderProvider(), verificationKey);
+            }
+            message = plainFactory.nextObject();
+        } else if (requireSignature) {
+            throw new PGPException("Expected PGP signature not present in decrypted message");
+        }
+
         if (!(message instanceof PGPLiteralData)) {
             throw new PGPException("Unexpected PGP data type: " + message.getClass().getName());
         }
@@ -132,8 +211,25 @@ public class PGPUtils {
         byte[] buffer = new byte[4096];
         int bytesRead;
         InputStream literalStream = literalData.getInputStream();
+        boolean verifying = onePassSig != null && verificationKey != null;
         while ((bytesRead = literalStream.read(buffer)) != -1) {
+            if (verifying) {
+                onePassSig.update(buffer, 0, bytesRead);
+            }
             result.write(buffer, 0, bytesRead);
+        }
+
+        if (verifying) {
+            Object sigObj = plainFactory.nextObject();
+            if (!(sigObj instanceof PGPSignatureList) || ((PGPSignatureList) sigObj).size() == 0) {
+                throw new PGPException("PGP signature packet missing after literal data");
+            }
+            PGPSignature signature = ((PGPSignatureList) sigObj).get(0);
+            if (!onePassSig.verify(signature)) {
+                throw new PGPException("PGP signature verification failed");
+            }
+        } else if (onePassSig != null && requireSignature) {
+            throw new PGPException("PGP signature present but no verification key available to check it");
         }
 
         // Verify integrity if the packet supports it

@@ -1,16 +1,22 @@
 package org.openas2.pgp;
 
 import org.bouncycastle.openpgp.PGPException;
+import org.bouncycastle.openpgp.PGPPrivateKey;
 import org.bouncycastle.openpgp.PGPPublicKey;
 import org.bouncycastle.openpgp.PGPPublicKeyRing;
 import org.bouncycastle.openpgp.PGPPublicKeyRingCollection;
+import org.bouncycastle.openpgp.PGPSecretKey;
+import org.bouncycastle.openpgp.PGPSecretKeyRing;
 import org.bouncycastle.openpgp.PGPSecretKeyRingCollection;
 import org.bouncycastle.openpgp.PGPUtil;
 import org.bouncycastle.openpgp.operator.jcajce.JcaKeyFingerprintCalculator;
+import org.bouncycastle.openpgp.operator.jcajce.JcePBESecretKeyDecryptorBuilder;
 import org.openas2.BaseComponent;
 import org.openas2.OpenAS2Exception;
 import org.openas2.Session;
 import org.openas2.params.InvalidParameterException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -34,6 +40,8 @@ import java.util.Map;
  * PGP secret keyring file.
  */
 public class PGPKeyFactory extends BaseComponent {
+
+    private static final Logger logger = LoggerFactory.getLogger(PGPKeyFactory.class);
 
     public static final String COMPID = "pgp_keys";
 
@@ -118,5 +126,61 @@ public class PGPKeyFactory extends BaseComponent {
 
     public char[] getPrivateKeyPassphrase() {
         return privateKeyPassphrase;
+    }
+
+    /**
+     * Resolve the local PGP signing key for {@code alias} from the private keyring.
+     * Matches {@code alias} against each key's User ID first (forward-compatible with
+     * keyrings holding multiple identities); if no User ID matches and the keyring holds
+     * exactly one secret key, falls back to that key, since today's deployed keyrings
+     * (see GeneratePGPTestKeys) have no User ID set at all.
+     *
+     * @param alias the configured {@code pgp_sender_key_alias} value
+     * @throws OpenAS2Exception if no usable signing key can be resolved, or extraction fails
+     */
+    public PGPPrivateKey getSigningKey(String alias) throws OpenAS2Exception {
+        if (secretKeyRingCollection == null) {
+            throw new OpenAS2Exception("PGP secret keyring not loaded");
+        }
+
+        PGPSecretKey matched = null;
+        PGPSecretKey onlyKey = null;
+        int keyCount = 0;
+
+        Iterator<PGPSecretKeyRing> rings = secretKeyRingCollection.getKeyRings();
+        while (rings.hasNext()) {
+            PGPSecretKey secretKey = rings.next().getSecretKey();
+            if (secretKey == null) {
+                continue;
+            }
+            keyCount++;
+            onlyKey = secretKey;
+            Iterator<String> userIds = secretKey.getUserIDs();
+            while (userIds.hasNext()) {
+                if (alias.equals(userIds.next())) {
+                    matched = secretKey;
+                    break;
+                }
+            }
+        }
+
+        PGPSecretKey signingKey = matched;
+        if (signingKey == null) {
+            if (keyCount == 1) {
+                if (logger.isDebugEnabled()) {
+                    logger.debug("No PGP secret key User ID matched alias '" + alias + "'; falling back to the sole key in the private keyring");
+                }
+                signingKey = onlyKey;
+            } else {
+                throw new OpenAS2Exception("PGP signing key not found for alias '" + alias + "' (private keyring contains " + keyCount + " keys, none matched by User ID)");
+            }
+        }
+
+        try {
+            return signingKey.extractPrivateKey(
+                    new JcePBESecretKeyDecryptorBuilder().build(privateKeyPassphrase));
+        } catch (PGPException e) {
+            throw new OpenAS2Exception("Failed to extract PGP private signing key for alias: " + alias, e);
+        }
     }
 }
